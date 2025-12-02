@@ -1,0 +1,11 @@
+Language: C
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 9999 
+BinPackArguments: true
+BinPackParameters: true
+AllowAllArgumentsOnNextLine: false
+SortIncludes: false
+AlignConsecutiveDeclarations: true
+AlignConsecutiveMacros: true
+PointerAlignment: Left
