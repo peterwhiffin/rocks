@@ -1,11 +1,6 @@
-#include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <time.h>
 #include <math.h>
 
-#include "SDL3/SDL_events.h"
 #include "SDL3/SDL_video.h"
 #include "SDL3/SDL_events.h"
 #include "SDL3/SDL_init.h"
@@ -16,7 +11,6 @@
 #include "glad.c"
 
 #define SHADER_PATH "../../../src/shaders/"
-#define COUNT(arr)  (sizeof(arr) / sizeof((arr)[0]))
 
 #define TOP_LEFT0   -1.0f, 1.0f
 #define TOP_MIDDLE1 0.0f, 1.0f
@@ -67,7 +61,7 @@ float textVerts[] = {
 
 typedef struct {
     unsigned int* data;
-    size_t        count;
+    size_t        size;
 } TextIndices;
 
 unsigned int zeroInd[8] = {
@@ -160,20 +154,20 @@ unsigned int nineInd[8] = {
 
 TextIndices textIndices[10] = {
     // clang-format off
-	{zeroInd, COUNT(zeroInd)},
-	{oneInd, COUNT(oneInd)},
-	{twoInd, COUNT(twoInd)},
-	{threeInd, COUNT(threeInd)},
-	{fourInd, COUNT(fourInd)},
-	{fiveInd, COUNT(fiveInd)},
-	{sixInd, COUNT(sixInd)},
-	{sevenInd, COUNT(sevenInd)},
-	{eightInd, COUNT(eightInd)},
-	{nineInd, COUNT(nineInd)}
+	{zeroInd, sizeof(zeroInd)},
+	{oneInd, sizeof(oneInd)},
+	{twoInd, sizeof(twoInd)},
+	{threeInd, sizeof(threeInd)},
+	{fourInd, sizeof(fourInd)},
+	{fiveInd, sizeof(fiveInd)},
+	{sixInd, sizeof(sixInd)},
+	{sevenInd, sizeof(sevenInd)},
+	{eightInd, sizeof(eightInd)},
+	{nineInd, sizeof(nineInd)}
     // clang-format on
 };
 
-float shipVerts[] = {
+float shipVerts[8] = {
     // clang-format off
 		0.0f, 0.9f,
 		-0.6f, -1.0f,
@@ -182,13 +176,13 @@ float shipVerts[] = {
     // clang-format on
 };
 
-unsigned int shipIndices[] = {0, 1, 1, 2, 2, 3, 3, 0};
+unsigned int shipIndices[8] = {0, 1, 1, 2, 2, 3, 3, 0};
 
-float bulletVerts[] = {0.0f, 0.0f};
+float bulletVerts[2] = {0.0f, 0.0f};
 
-unsigned int bulletIndices[] = {0};
+unsigned int bulletIndices[1] = {0};
 
-float quadVerts[] = {
+float quadVerts[8] = {
     // clang-format off
 		-1.0f, -1.0f,
 		1.0f, -1.0f,
@@ -197,7 +191,7 @@ float quadVerts[] = {
     // clang-format on
 };
 
-unsigned int quadIndices[] = {0, 1, 2, 2, 3, 1};
+unsigned int quadIndices[6] = {0, 1, 2, 2, 3, 1};
 
 typedef struct {
     float x;
@@ -243,6 +237,12 @@ typedef struct {
     DrawInfo ship;
     DrawInfo text[34];
     DrawInfo textVert;
+    vec2     lifePos;
+    vec2     scorePos;
+    float    lifeScale;
+    float    scoreScale;
+    float    lifePadding;
+    float    scorePadding;
     GLuint   shader;
 } Renderer;
 
@@ -452,27 +452,31 @@ void createVAO(Renderer* r, DrawInfo* d, float* verts, unsigned int* indices, si
 }
 
 void createText(Renderer* r) {
-    size_t nextOffset = 0;
-    size_t size = 0;
+    size_t sizeOffset = sizeof(textVerts);
+    size_t countOffset = 0;
+    size_t indSize = 0;
 
     for (int i = 0; i < 10; i++) {
-        size += textIndices[i].count * sizeof(unsigned int);
+        indSize += textIndices[i].size;
     }
 
-    unsigned int* indices = malloc(size);
+    unsigned int* indices = malloc(indSize);
 
     for (int i = 0; i < 10; i++) {
         DrawInfo* d = &r->text[i];
-        size_t    count = textIndices[i].count;
-        d->indOffset = nextOffset * sizeof(unsigned int);
+        size_t    size = textIndices[i].size;
+        size_t    count = size / sizeof(unsigned int);
+
+        d->indOffset = sizeOffset;
         d->indCount = count;
 
-        memcpy(indices + nextOffset, textIndices[i].data, count * sizeof(unsigned int));
+        memcpy(indices + countOffset, textIndices[i].data, size);
 
-        nextOffset += count;
+        sizeOffset += size;
+        countOffset += count;
     }
 
-    createVAO(r, &r->textVert, textVerts, indices, sizeof(textVerts), nextOffset * sizeof(unsigned int));
+    createVAO(r, &r->textVert, textVerts, indices, sizeof(textVerts), indSize);
 
     for (int i = 0; i < 10; i++) {
         r->text[i].vao = r->textVert.vao;
@@ -531,6 +535,12 @@ void initRenderer(Renderer* r) {
     r->textVert.colorTimer = 0.0f;
     r->textVert.colorDuration = 1.5f;
     r->shader = loadShader("shader.vert", "shader.frag");
+    r->lifePos = (vec2){-0.9, 0.8f};
+    r->scorePos = (vec2){-0.9, 0.9f};
+    r->lifeScale = 0.032f;
+    r->scoreScale = 0.03f;
+    r->lifePadding = 0.055f;
+    r->scorePadding = 0.07f;
 
     glClearColor(0.0, 0.0, 0.0, 1.0);
     glEnable(GL_DEPTH_TEST);
@@ -554,6 +564,7 @@ void initScene(Scene* s, Renderer* r) {
     s->ship.accel = 0.007f;
     s->ship.canShoot = true;
     s->ship.lives = 4;
+    s->ship.score = 0;
     s->bulletSpeed = 2.0f;
     s->bulletLifetime = 1.0f;
     s->ship.poly = &r->ship;
@@ -660,7 +671,6 @@ void hitAsteroid(Scene* s, Asteroid* a, Renderer* r) {
     removeAsteroid(s, a);
 
     if (s->numAsteroids == 0) {
-        printf("restarting level");
         s->newLevel = true;
     }
 }
@@ -677,9 +687,9 @@ void removeBullet(Scene* s, Bullet* b) {
 
 void checkCollisions(Scene* s, Renderer* r) {
     for (int i = s->numBullets - 1; i >= 0; i--) {
-        Bullet*      b = &s->bullets[i];
-        unsigned int numAsteroids = s->numAsteroids - 1;
-        for (int k = numAsteroids; k >= 0; k--) {
+        Bullet* b = &s->bullets[i];
+
+        for (int k = s->numAsteroids - 1; k >= 0; k--) {
             Asteroid* a = &s->asteroids[k];
             vec2      v = (vec2){a->pos.x - b->pos.x, a->pos.y - b->pos.y};
 
@@ -788,36 +798,42 @@ void updateInput(Input* i) {
 }
 
 void drawScene(Scene* s, Renderer* r) {
+    Ship*     ship = &s->ship;
+    DrawInfo* ren = ship->poly;
+
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(r->shader);
-    glUniform3fv(3, 1, &s->ship.poly->color.x);
+    glUniform3fv(3, 1, &ren->color.x);
     glUniform1fv(7, 1, &s->time);
 
-    glUniform2fv(1, 1, &s->ship.pos.x);
-    glUniform1f(2, s->ship.scale);
-    glUniform1f(4, s->ship.angle);
-    glBindVertexArray(r->ship.vao);
-    glDrawElements(GL_LINES, r->ship.indCount, GL_UNSIGNED_INT, (void*)r->ship.indOffset);
+    glUniform2fv(1, 1, &ship->pos.x);
+    glUniform1f(2, ship->scale);
+    glUniform1f(4, ship->angle);
+    glBindVertexArray(ren->vao);
+    glDrawElements(GL_LINES, ren->indCount, GL_UNSIGNED_INT, (void*)ren->indOffset);
 
-    vec2 livePos = {-0.9, 0.8f};
+    vec2 pos = r->lifePos;
     glUniform1f(4, 0.0f);
     glUniform1f(2, s->ship.scale - 0.018f);
 
     for (int i = 0; i < s->ship.lives; i++) {
-        glUniform2fv(1, 1, &livePos.x);
-        livePos.x += 0.055f;
-        glDrawElements(GL_LINES, r->ship.indCount, GL_UNSIGNED_INT, (void*)r->ship.indOffset);
+        glUniform2fv(1, 1, &pos.x);
+        glDrawElements(GL_LINES, ren->indCount, GL_UNSIGNED_INT, (void*)ren->indOffset);
+        pos.x += r->lifePadding;
     }
 
+    glUniform1f(4, 0.0f);
+    glUniform1f(5, 2.2f);
+
     for (int i = 0; i < s->numAsteroids; i++) {
-        glUniform2fv(1, 1, &s->asteroids[i].pos.x);
-        glUniform1f(2, s->asteroids[i].scale);
-        glUniform3fv(3, 1, &s->asteroids[i].poly->color.x);
-        glUniform1f(4, 0.0f);
-        glUniform1f(5, 2.2f);
-        glBindVertexArray(s->asteroids[i].poly->vao);
-        glDrawElements(GL_LINES, s->asteroids[i].poly->indCount, GL_UNSIGNED_INT, (void*)s->asteroids[i].poly->indOffset);
-        glDrawArrays(GL_POINTS, 0, s->asteroids[i].poly->indCount / 2);
+        Asteroid* a = &s->asteroids[i];
+        ren = a->poly;
+        glUniform2fv(1, 1, &a->pos.x);
+        glUniform1f(2, a->scale);
+        glUniform3fv(3, 1, &ren->color.x);
+        glBindVertexArray(ren->vao);
+        glDrawElements(GL_LINES, ren->indCount, GL_UNSIGNED_INT, (void*)ren->indOffset);
+        glDrawArrays(GL_POINTS, 0, ren->indCount * 0.5f);
     }
 
     for (int i = 0; i < s->numBullets; i++) {
@@ -830,26 +846,26 @@ void drawScene(Scene* s, Renderer* r) {
         glDrawArrays(GL_POINTS, 0, 1);
     }
 
-    glUniform1f(2, 0.03);
-
-    vec2 scorePos = {-0.9, 0.9f};
-    glBindVertexArray(r->textVert.vao);
-
     int base = s->ship.score;
     int count = 0;
     int digits[8];
+    digits[0] = 0;
 
-    while (base > 0) {
+    do {
         digits[count] = base % 10;
-        base /= 10;
+        // base /= 10;
         count++;
-    }
+    } while (base /= 10);
+
+    glBindVertexArray(r->textVert.vao);
+    glUniform1f(2, 0.03);
+    pos = r->scorePos;
 
     for (int i = count - 1; i >= 0; i--) {
-        glUniform2fv(1, 1, &scorePos.x);
+        glUniform2fv(1, 1, &pos.x);
         glUniform3fv(3, 1, &r->textVert.color.x);
-        glDrawElements(GL_LINES, r->text[digits[i]].indCount, GL_UNSIGNED_INT, (void*)r->text[digits[i]].indOffset + r->textVert.indOffset);
-        scorePos.x += 0.07f;
+        glDrawElements(GL_LINES, r->text[digits[i]].indCount, GL_UNSIGNED_INT, (void*)r->text[digits[i]].indOffset);
+        pos.x += r->scorePadding;
     }
 }
 
