@@ -1,3 +1,4 @@
+#include <SDL3/SDL_events.h>
 #include <time.h>
 #include <math.h>
 
@@ -176,12 +177,6 @@ float shipVerts[8] = {
     // clang-format on
 };
 
-unsigned int shipIndices[8] = {0, 1, 1, 2, 2, 3, 3, 0};
-
-float bulletVerts[2] = {0.0f, 0.0f};
-
-unsigned int bulletIndices[1] = {0};
-
 float quadVerts[8] = {
     // clang-format off
 		-1.0f, -1.0f,
@@ -191,7 +186,10 @@ float quadVerts[8] = {
     // clang-format on
 };
 
+unsigned int shipIndices[8] = {0, 1, 1, 2, 2, 3, 3, 0};
 unsigned int quadIndices[6] = {0, 1, 2, 2, 3, 1};
+unsigned int bulletIndices[1] = {0};
+float        bulletVerts[2] = {0.0f, 0.0f};
 
 typedef struct {
     float x;
@@ -221,6 +219,7 @@ typedef struct {
     SDL_Window*   ptr;
     SDL_GLContext glContext;
     vec2          res;
+    vec2          screenSize;
     bool          shouldClose;
 } Window;
 
@@ -292,14 +291,12 @@ typedef struct {
 } Scene;
 
 float lerp(float a, float b, float t) { return a + (b - a) * t; }
-
 float randomFloatNormal() { return rand() / (float)RAND_MAX; }
-
 float randomRange(float min, float max) { return lerp(min, max, randomFloatNormal()); }
-
 float vec2_magnitude(vec2 v) { return sqrt(v.x * v.x + v.y * v.y); }
 float vec3_magnitude(vec3 v) { return sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
-vec3  vec3_lerp(vec3 a, vec3 b, float t) {
+
+vec3 vec3_lerp(vec3 a, vec3 b, float t) {
     if (t > 1) {
         t = 1;
     } else if (t < 0) {
@@ -328,7 +325,7 @@ void initWindow(Window* w, Input* i) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 6);
 
-    SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN;
+    SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;
     SDL_Window*     ptr = SDL_CreateWindow("petes practice", 800, 800, flags);
     w->glContext = SDL_GL_CreateContext(ptr);
 
@@ -574,6 +571,19 @@ void initScene(Scene* s, Renderer* r) {
     s->ship.poly->colorTimer = 0.0f;
 }
 
+void windowResized(Window* w, vec2 res) {
+    w->screenSize = res;
+
+    if (res.x > res.y) {
+        res.x = res.y;
+    } else {
+        res.y = res.x;
+    }
+
+    w->res = res;
+    glViewport((w->screenSize.x - res.x) * 0.5f, (w->screenSize.y - res.y) * 0.5f, res.x, res.y);
+}
+
 void pollEvents(Window* w) {
     SDL_Event event;
 
@@ -582,19 +592,19 @@ void pollEvents(Window* w) {
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                 w->shouldClose = true;
                 break;
+            case SDL_EVENT_WINDOW_RESIZED:
+                windowResized(w, (vec2){event.window.data1, event.window.data2});
+                break;
         }
     }
 }
 
 void wrapScreen(vec2* pos) {
-    float x = pos->x;
-    float y = pos->y;
-
-    if (x > 1 || x < -1) {
+    if (pos->x > 1 || pos->x < -1) {
         pos->x *= -1;
     }
 
-    if (y > 1 || y < -1) {
+    if (pos->y > 1 || pos->y < -1) {
         pos->y *= -1;
     }
 }
