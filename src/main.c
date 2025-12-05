@@ -1,3 +1,5 @@
+#include <stdalign.h>
+#include <stdio.h>
 #include <time.h>
 #include <math.h>
 
@@ -8,16 +10,22 @@
 #include "SDL3/SDL_scancode.h"
 #include "SDL3/SDL_timer.h"
 
+#include "AL/al.h"
+#include "AL/alc.h"
+#include "AL/alext.h"
+
 #include "glad.c"
+#include "alhelpers.c"
+#include "soundtest.c"
 
 #define SHADER_PATH "../../../src/shaders/"
 
-#define U_POS       1
-#define U_SCALE     2
-#define U_ANGLE     3
-#define U_POINTSIZE 4
-#define U_COLOR     7
-#define U_TIME      8
+#define U_POS       2
+#define U_SCALE     3
+#define U_ANGLE     4
+#define U_POINTSIZE 5
+#define U_COLOR     8
+#define U_TIME      9
 
 #define TOP_LEFT0   -1.0f, 1.0f
 #define TOP_MIDDLE1 0.0f, 1.0f
@@ -30,33 +38,6 @@
 #define BOTTOM_LEFT6   -1.0f, -1.0f
 #define BOTTOM_MIDDLE7 0.0f, -1.0f
 #define BOTTOM_RIGHT8  1.0f, -1.0f
-
-#define A 9
-#define B 10
-#define C 11
-#define D 12
-#define E 13
-#define F 14
-#define G 15
-#define H 16
-#define I 17
-#define J 18
-#define K 19
-#define L 20
-#define M 21
-#define N 22
-#define O 23
-#define P 24
-#define Q 25
-#define R 26
-#define S 27
-#define T 28
-#define U 29
-#define V 30
-#define W 31
-#define X 32
-#define Y 33
-#define Z 34
 
 float textVerts[] = {
     // clang-format off
@@ -183,17 +164,27 @@ float shipVerts[8] = {
     // clang-format on
 };
 
-float quadVerts[8] = {
+float quadVerts[16] = {
     // clang-format off
-		-1.0f, -1.0f,
-		1.0f, -1.0f,
-		-1.0f, 1.0f,
-		1.0f, 1.0f,
+		-1.0f, -1.0f, 0.0f, 0.0f,
+		1.0f, -1.0f, 1.0f, 0.0f,
+		-1.0f, 1.0f, 0.0f, 1.0f,
+		1.0f, 1.0f, 1.0f, 1.0f
+    // clang-format on
+};
+
+float buttonVerts[16] = {
+    // clang-format off
+		-1.0f, -1.0f, 0.0f, 0.0f,
+		1.0f, -1.0f, 1.0f, 0.0f,
+		-1.0f, 0.0f, 0.0f, 1.0f,
+		1.0f, 0.0f, 1.0f, 1.0f
     // clang-format on
 };
 
 unsigned int shipIndices[8] = {0, 1, 1, 2, 2, 3, 3, 0};
 unsigned int quadIndices[6] = {0, 1, 2, 2, 3, 1};
+unsigned int boxIndices[8] = {0, 1, 1, 3, 3, 2, 2, 0};
 unsigned int bulletIndices[1] = {0};
 float        bulletVerts[2] = {0.0f, 0.0f};
 
@@ -216,6 +207,13 @@ typedef struct {
 } vec3;
 
 typedef struct {
+    float x;
+    float y;
+    float z;
+    float w;
+} vec4;
+
+typedef struct {
     GLintptr indOffset;
     GLuint   indCount;
     GLuint   vao;
@@ -235,7 +233,9 @@ typedef struct {
 
 typedef struct {
     vec2        move;
+    vec2        cursorPosition;
     bool        shoot;
+    bool        mouse0;
     const bool* keyStates;
 } Input;
 
@@ -243,16 +243,24 @@ typedef struct {
     DrawInfo asteroidDrawInfos[16];
     DrawInfo bulletDrawInfo;
     DrawInfo quadDrawInfo;
+    DrawInfo boxDrawInfo;
+    DrawInfo buttonDrawInfo;
     DrawInfo shipDrawInfo;
     DrawInfo text[34];
     DrawInfo textVert;
     vec2     lifePos;
     vec2     scorePos;
+    vec4     clearColor;
+    float    clearDepth;
     float    lifeScale;
     float    scoreScale;
     float    lifePadding;
     float    scorePadding;
     GLuint   shader;
+    GLuint   fullScreenShader;
+    GLuint   fbo;
+    GLuint   renderBuffer;
+    GLuint   renderTarget;
 } Renderer;
 
 typedef struct {
@@ -273,6 +281,7 @@ typedef struct {
     Transform transform;
     DrawInfo  drawInfo;
     float     lifetime;
+    bool      hasWrapped;
 } Bullet;
 
 typedef struct {
@@ -282,6 +291,11 @@ typedef struct {
     float     turnRate;
     float     maxVel;
 } Ship;
+
+typedef struct {
+    Transform transform;
+    DrawInfo  drawInfo;
+} Button;
 
 typedef struct {
     Asteroid      asteroids[128];
@@ -295,17 +309,21 @@ typedef struct {
     float         levelLoadTime;
     float         bulletLifetime;
     float         bulletSpeed;
+    float         shootSoundTimer;
+    float         shootSoundTime;
+    ALuint        shootSoundSource;
     unsigned int  numAsteroids;
     unsigned int  numBullets;
     unsigned int  level;
     unsigned int  score;
     unsigned int  lives;
     unsigned char flags;
+    bool          shootSoundPlaying;
 } Scene;
 
-float lerp(float a, float b, float t) { return a + (b - a) * t; }
-float randomFloatNormal() { return rand() / (float)RAND_MAX; }
-float randomRangeF(float min, float max) { return lerp(min, max, randomFloatNormal()); }
+// float lerp(float a, float b, float t) { return a + (b - a) * t; }
+// float randomFloatNormal() { return rand() / (float)RAND_MAX; }
+// float randomRangeF(float min, float max) { return lerp(min, max, randomFloatNormal()); }
 int   randomRangeI(int min, int max) { return (int)floor(randomRangeF(min, max)); }
 float vec2_magnitude(vec2 v) { return sqrt(v.x * v.x + v.y * v.y); }
 float vec3_magnitude(vec3 v) { return sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
@@ -334,7 +352,7 @@ void unsetFlag(Scene* s, Flags f) { s->flags &= ~f; }
 
 void initWindow(Window* w, Input* i) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
-        printf("failed to init sdl");
+        printf("failed to init sdl\n");
     }
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
@@ -343,7 +361,8 @@ void initWindow(Window* w, Input* i) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 6);
 
     SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;
-    SDL_Window*     ptr = SDL_CreateWindow("petes practice", 800, 800, flags);
+    // SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN;
+    SDL_Window* ptr = SDL_CreateWindow("petes practice", 800, 800, flags);
     w->glContext = SDL_GL_CreateContext(ptr);
 
     SDL_GL_MakeCurrent(ptr, w->glContext);
@@ -353,7 +372,8 @@ void initWindow(Window* w, Input* i) {
 
     i->keyStates = SDL_GetKeyboardState(NULL);
     w->ptr = ptr;
-    w->res = (vec2){800, 800};
+    w->res = (vec2){800.0f, 800.0f};
+    w->screenSize = (vec2){800.0f, 800.0f};
     w->shouldClose = false;
 }
 
@@ -382,7 +402,7 @@ void checkShader(GLuint shader) {
     if (!success) {
         char log[1024];
         glGetShaderInfoLog(shader, 1024, NULL, log);
-        printf("Shader compilation error: %s", log);
+        printf("Shader compilation error: %s\n", log);
     }
 }
 
@@ -394,7 +414,7 @@ void checkProgram(GLuint program) {
     if (!success) {
         char log[1024];
         glGetShaderInfoLog(program, 1024, NULL, log);
-        printf("Shader link error: %s", log);
+        printf("Shader link error: %s\n", log);
     }
 }
 
@@ -434,7 +454,7 @@ void loadShader(GLuint* shader, const char* vertFile, const char* fragFile) {
     *shader = program;
 }
 
-void createVAO(Renderer* r, DrawInfo* d, float* verts, unsigned int* indices, size_t vertSize, size_t indSize) {
+void createVAO(Renderer* r, DrawInfo* d, float* verts, unsigned int* indices, size_t vertSize, size_t indSize, bool hasTexCoords) {
     GLsizeiptr     vertLen = vertSize;
     GLsizeiptr     indLen = indSize;
     GLintptr       indOffset = vertLen;
@@ -451,12 +471,20 @@ void createVAO(Renderer* r, DrawInfo* d, float* verts, unsigned int* indices, si
 
     glNamedBufferStorage(buf, vertLen + indLen, data, 0);
 
-    glVertexArrayVertexBuffer(vao, 0, buf, 0, 2 * sizeof(float));
+    GLsizei size = hasTexCoords ? 4 * sizeof(float) : 2 * sizeof(float);
+
+    glVertexArrayVertexBuffer(vao, 0, buf, 0, size);
     glVertexArrayElementBuffer(vao, buf);
 
     glEnableVertexArrayAttrib(vao, 0);
     glVertexArrayAttribFormat(vao, 0, 2, GL_FLOAT, GL_FALSE, 0);
     glVertexArrayAttribBinding(vao, 0, 0);
+
+    if (hasTexCoords) {
+        glEnableVertexArrayAttrib(vao, 1);
+        glVertexArrayAttribFormat(vao, 1, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float));
+        glVertexArrayAttribBinding(vao, 1, 0);
+    }
 
     d->vao = vao;
     d->buf = buf;
@@ -490,7 +518,7 @@ void createText(Renderer* r) {
         countOffset += count;
     }
 
-    createVAO(r, &r->textVert, textVerts, indices, sizeof(textVerts), indSize);
+    createVAO(r, &r->textVert, textVerts, indices, sizeof(textVerts), indSize, false);
     r->textVert.drawMode = GL_LINES;
 
     for (int i = 0; i < 10; i++) {
@@ -504,13 +532,13 @@ void createText(Renderer* r) {
 void createRandomPolygon(Renderer* r, DrawInfo* p) {
     float        x, y, radius, angle;
     unsigned int ind1, ind2;
-    unsigned int numSides = (int)floor(randomRangeF(7.0f, 12.0f));
+    unsigned int numSides = (int)floor(randomRangeF(12.0f, 16.0f));
     float        polyVerts[512];
     unsigned int polyIndices[512];
     float        angleStep = (2 * M_PI) / numSides;
 
     for (int i = 0; i < numSides; i++) {
-        radius = randomRangeF(0.4, 1.0f);
+        radius = randomRangeF(0.7, 1.0f);
         angle = angleStep * i;
         x = radius * cos(angle);
         y = radius * sin(angle);
@@ -527,10 +555,42 @@ void createRandomPolygon(Renderer* r, DrawInfo* p) {
     }
 
     polyIndices[(numSides * 2) - 1] = 0;
-    createVAO(r, p, polyVerts, polyIndices, sizeof(polyVerts[0]) * numSides * 2, sizeof(polyIndices[0]) * numSides * 2);
+    createVAO(r, p, polyVerts, polyIndices, sizeof(polyVerts[0]) * numSides * 2, sizeof(polyIndices[0]) * numSides * 2, false);
 }
 
-void initRenderer(Renderer* r) {
+void createFramebuffer(Renderer* r, Window* w) {
+    glCreateTextures(GL_TEXTURE_2D, 1, &r->renderTarget);
+    glTextureParameteri(r->renderTarget, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTextureParameteri(r->renderTarget, GL_TEXTURE_WRAP_R, GL_REPEAT);
+    glTextureParameteri(r->renderTarget, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(r->renderTarget, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTextureStorage2D(r->renderTarget, 1, GL_RGBA16F, w->res.x, w->res.y);
+
+    glCreateRenderbuffers(1, &r->renderBuffer);
+    glNamedRenderbufferStorage(r->renderBuffer, GL_DEPTH_COMPONENT, w->res.x, w->res.y);
+
+    glCreateFramebuffers(1, &r->fbo);
+    glNamedFramebufferTexture(r->fbo, GL_COLOR_ATTACHMENT0, r->renderTarget, 0);
+
+    glNamedFramebufferDrawBuffer(r->fbo, GL_COLOR_ATTACHMENT0);
+    glNamedFramebufferRenderbuffer(r->fbo, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, r->renderBuffer);
+
+    if (glCheckNamedFramebufferStatus(r->fbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        printf("ERROR::FRAMEBUFFER::Framebuffer not complete\n");
+    } else {
+        printf("frame buffer created\n");
+    }
+}
+
+void resizeFramebuffer(Renderer* r, Window* w) {
+    printf("frame buffer DELETED\n");
+    glDeleteTextures(1, &r->renderTarget);
+    glDeleteRenderbuffers(1, &r->renderBuffer);
+    glDeleteFramebuffers(1, &r->fbo);
+    createFramebuffer(r, w);
+}
+
+void initRenderer(Renderer* r, Window* w) {
     gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress);
 
     for (int i = 0; i < sizeof(r->asteroidDrawInfos) / sizeof(DrawInfo); i++) {
@@ -540,14 +600,20 @@ void initRenderer(Renderer* r) {
     }
 
     createText(r);
-    createVAO(r, &r->shipDrawInfo, shipVerts, shipIndices, sizeof(shipVerts), sizeof(shipIndices));
-    createVAO(r, &r->bulletDrawInfo, bulletVerts, bulletIndices, sizeof(bulletVerts), sizeof(bulletIndices));
-    createVAO(r, &r->quadDrawInfo, quadVerts, quadIndices, sizeof(quadVerts), sizeof(quadIndices));
+    createVAO(r, &r->shipDrawInfo, shipVerts, shipIndices, sizeof(shipVerts), sizeof(shipIndices), false);
+    createVAO(r, &r->bulletDrawInfo, bulletVerts, bulletIndices, sizeof(bulletVerts), sizeof(bulletIndices), false);
+    createVAO(r, &r->quadDrawInfo, quadVerts, quadIndices, sizeof(quadVerts), sizeof(quadIndices), true);
+    createVAO(r, &r->boxDrawInfo, quadVerts, boxIndices, sizeof(quadVerts), sizeof(boxIndices), true);
+    createVAO(r, &r->buttonDrawInfo, buttonVerts, boxIndices, sizeof(buttonVerts), sizeof(boxIndices), true);
     loadShader(&r->shader, "shader.vert", "shader.frag");
+    loadShader(&r->fullScreenShader, "fullscreenshader.vert", "fullscreenshader.frag");
+    createFramebuffer(r, w);
 
     r->quadDrawInfo.drawMode = GL_TRIANGLE_STRIP;
     r->bulletDrawInfo.drawMode = GL_POINTS;
     r->shipDrawInfo.drawMode = GL_LINES;
+    r->boxDrawInfo.drawMode = GL_LINES;
+    r->buttonDrawInfo.drawMode = GL_LINES;
 
     r->textVert.color = randomColor();
     r->lifePos = (vec2){-0.9, 0.8f};
@@ -556,6 +622,9 @@ void initRenderer(Renderer* r) {
     r->scoreScale = 0.03f;
     r->lifePadding = 0.055f;
     r->scorePadding = 0.07f;
+
+    r->clearColor = (vec4){0.0f, 0.0f, 0.0f, 0.0f};
+    r->clearDepth = 1.0f;
 
     glClearColor(0.0, 0.0, 0.0, 1.0);
     glEnable(GL_DEPTH_TEST);
@@ -571,9 +640,11 @@ void initScene(Scene* s, Renderer* r) {
     s->levelLoadTime = 3.0f;
     s->levelTimer = 0.0f;
     s->bulletSpeed = 2.0f;
-    s->bulletLifetime = 1.0f;
+    s->bulletLifetime = 0.5f;
     s->lives = 4;
     s->score = 0;
+    s->shootSoundPlaying = false;
+    s->shootSoundTime = 5.05f;
 
     s->numAsteroids = 0;
     s->numBullets = 0;
@@ -594,7 +665,7 @@ void initScene(Scene* s, Renderer* r) {
     setFlag(s, ALIVE);
 }
 
-void windowResized(Window* w, vec2 res) {
+void windowResized(Window* w, Renderer* r, vec2 res) {
     w->screenSize = res;
 
     if (res.x > res.y) {
@@ -604,10 +675,13 @@ void windowResized(Window* w, vec2 res) {
     }
 
     w->res = res;
+    resizeFramebuffer(r, w);
     glViewport((w->screenSize.x - res.x) * 0.5f, (w->screenSize.y - res.y) * 0.5f, res.x, res.y);
+    glUseProgram(r->fullScreenShader);
+    glUniform2fv(3, 1, &res.x);
 }
 
-void pollEvents(Window* w) {
+void pollEvents(Window* w, Renderer* r) {
     SDL_Event event;
 
     while (SDL_PollEvent(&event)) {
@@ -616,7 +690,7 @@ void pollEvents(Window* w) {
                 w->shouldClose = true;
                 break;
             case SDL_EVENT_WINDOW_RESIZED:
-                windowResized(w, (vec2){event.window.data1, event.window.data2});
+                windowResized(w, r, (vec2){event.window.data1, event.window.data2});
                 break;
         }
     }
@@ -631,6 +705,9 @@ void updateTime(Scene* s) {
 void updateInput(Input* i) {
     i->move.x = 0;
     i->move.y = 0;
+
+    SDL_MouseButtonFlags mouseButtonMask = SDL_GetMouseState(&i->cursorPosition.x, &i->cursorPosition.y);
+    i->mouse0 = mouseButtonMask & SDL_BUTTON_LMASK;
     i->move.x += i->keyStates[SDL_SCANCODE_RIGHT] ? -1 : 0;
     i->move.x += i->keyStates[SDL_SCANCODE_LEFT] ? 1 : 0;
     i->move.y += i->keyStates[SDL_SCANCODE_UP] ? 1 : 0;
@@ -638,14 +715,26 @@ void updateInput(Input* i) {
     i->shoot = i->keyStates[SDL_SCANCODE_SPACE];
 }
 
-void wrapScreen(vec2* pos) {
-    if (pos->x > 1 || pos->x < -1) {
-        pos->x *= -1;
+bool wrapScreen(vec2* pos) {
+    bool wrapped = false;
+
+    if (pos->x > 1) {
+        pos->x = -1;
+        wrapped = true;
+    } else if (pos->x < -1) {
+        pos->x = 1;
+        wrapped = true;
     }
 
-    if (pos->y > 1 || pos->y < -1) {
-        pos->y *= -1;
+    if (pos->y > 1) {
+        pos->y = -1;
+        wrapped = true;
+    } else if (pos->y < -1) {
+        pos->y = 1;
+        wrapped = true;
     }
+
+    return wrapped;
 }
 
 void removeBullet(Scene* s, Bullet* e) {
@@ -663,6 +752,7 @@ void newBullet(Scene* s, Renderer* r, vec2 pos, vec2 vel) {
     b->drawInfo = r->bulletDrawInfo;
     b->transform.pos = pos;
     b->transform.vel = vel;
+    b->hasWrapped = false;
 
     b->lifetime = s->bulletLifetime;
     s->numBullets++;
@@ -689,11 +779,19 @@ void loadLevel(Scene* s, Renderer* r) {
     s->numAsteroids = 0;
     s->numBullets = 0;
 
-    for (int i = 0; i < 4 + s->level; i++) {
+    float angleStep = (2 * M_PI) / (4 + s->level);
+
+    for (int i = 0; i < 3 + s->level; i++) {
         Asteroid* e = getNewAsteroid(s, r);
+        float     radius = randomRangeF(0.3f, 1.0f);
+        float     angle = angleStep * i;
+
+        float x = s->ship.transform.pos.x + radius * cos(angle);
+        float y = s->ship.transform.pos.y + radius * sin(angle);
+
         e->transform.vel = (vec2){randomRangeF(-0.3f, 0.3f), randomRangeF(-0.3f, 0.3f)};
-        e->transform.scale = 0.3f;
-        e->transform.pos = (vec2){randomRangeF(-1.0f, 1.0f), randomRangeF(-1.0f, 1.0f)};
+        e->transform.scale = 0.18f;
+        e->transform.pos = (vec2){x, y};
         e->level = 3;
     }
 
@@ -703,11 +801,29 @@ void loadLevel(Scene* s, Renderer* r) {
 
 void hitAsteroid(Scene* s, Asteroid* hitAsteroid, Renderer* r) {
     hitAsteroid->level -= 1;
-    s->score += 100;
+    unsigned int score = 100;
+
+    if (hitAsteroid->level == 1) {
+        score = 50;
+    } else if (hitAsteroid->level == 2) {
+        score = 25;
+    }
+
+    s->score += score;
+
+    if (s->score % 10000 == 0) {
+        s->lives += 1;
+    }
 
     if (hitAsteroid->level != 0) {
         int   mod = 1;
-        float scale = hitAsteroid->level == 2 ? 0.1f : 0.05f;
+        float scale = hitAsteroid->level == 2 ? 0.07f : 0.03f;
+        float minVel = hitAsteroid->level == 2 ? 0.1f : 0.50f;
+
+        if (vec2_magnitude(hitAsteroid->transform.vel) < minVel) {
+            vec2 dir = normalize(hitAsteroid->transform.vel);
+            hitAsteroid->transform.vel = (vec2){dir.x * minVel, dir.y * minVel};
+        }
 
         for (int i = 0; i < 2; i++) {
             Asteroid* newAsteroid = getNewAsteroid(s, r);
@@ -769,7 +885,7 @@ void checkCollisions(Scene* s, Renderer* r) {
             Asteroid* a = &s->asteroids[i];
             vec2      v = (vec2){ship->transform.pos.x - a->transform.pos.x, ship->transform.pos.y - a->transform.pos.y};
 
-            if (vec2_magnitude(v) < (a->drawInfo.maxRadius * a->transform.scale)) {
+            if (vec2_magnitude(v) < (a->drawInfo.maxRadius * a->transform.scale * 1.1f)) {
                 hitShip(s, r);
                 break;
             }
@@ -799,6 +915,25 @@ void updateDeathTimer(Scene* s, float dt) {
         }
     } else {
         s->deathTimer += dt;
+    }
+}
+
+void playShootSound(Scene* s) {
+    s->shootSoundPlaying = true;
+    s->shootSoundTimer = 0.0f;
+    alSourcePlay(s->shootSoundSource);
+}
+
+void stopShootSound(Scene* s) {
+    s->shootSoundPlaying = false;
+    alSourceStop(s->shootSoundSource);
+}
+
+void updateShootSoundTimer(Scene* s) {
+    s->shootSoundTimer += s->deltaTime;
+
+    if (s->shootSoundTimer >= s->shootSoundTime) {
+        stopShootSound(s);
     }
 }
 
@@ -832,12 +967,18 @@ void updateShip(Scene* s, Renderer* r, Input* input, float dt) {
     if (input->shoot) {
         if (s->flags & CAN_SHOOT) {
             unsetFlag(s, CAN_SHOOT);
+            playShootSound(s);
+
             vec2 pos = {s->ship.transform.pos.x + fwd.x * 0.1f, s->ship.transform.pos.y + fwd.y * 0.1f};
             vec2 vel = {fwd.x * s->bulletSpeed, fwd.y * s->bulletSpeed};
             newBullet(s, r, pos, vel);
         }
     } else {
         setFlag(s, CAN_SHOOT);
+    }
+
+    if (s->shootSoundPlaying) {
+        updateShootSoundTimer(s);
     }
 }
 
@@ -855,13 +996,15 @@ void updateBullets(Scene* s, float dt) {
         Bullet* b = &s->bullets[i];
         b->lifetime -= dt;
 
-        if (b->lifetime <= 0) {
+        if (b->lifetime <= 0 && b->hasWrapped) {
             removeBullet(s, b);
             continue;
         }
 
         b->transform.pos = (vec2){b->transform.pos.x + b->transform.vel.x * dt, b->transform.pos.y + b->transform.vel.y * dt};
-        wrapScreen(&b->transform.pos);
+        if (wrapScreen(&b->transform.pos)) {
+            b->hasWrapped = true;
+        }
     }
 }
 
@@ -910,10 +1053,26 @@ void drawCmd(Transform* t, DrawInfo* d) {
     glDrawElements(d->drawMode, d->indCount, GL_UNSIGNED_INT, (void*)d->indOffset);
 }
 
-void drawScene(Scene* s, Renderer* r) {
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+void drawBorder(Renderer* r) {
+    vec2 pos = (vec2){0.0f, 0.0f};
+
+    glUniform2fv(U_POS, 1, &pos.x);
+    glUniform1f(U_SCALE, 0.999f);
+    glUniform1f(U_ANGLE, 0.0f);
+
+    glBindVertexArray(r->boxDrawInfo.vao);
+    glDrawElements(r->boxDrawInfo.drawMode, r->boxDrawInfo.indCount, GL_UNSIGNED_INT, (void*)r->boxDrawInfo.indOffset);
+}
+
+void drawScene(Scene* s, Renderer* r, Window* w) {
+    // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glViewport(0.0f, 0.0f, w->res.x, w->res.y);
+    glBindFramebuffer(GL_FRAMEBUFFER, r->fbo);
+    glClearNamedFramebufferfv(r->fbo, GL_COLOR, 0, &r->clearColor.x);
+    glClearNamedFramebufferfv(r->fbo, GL_DEPTH, 0, &r->clearDepth);
+
     glUseProgram(r->shader);
-    glUniform1f(U_POINTSIZE, 2.0f);
+    glUniform1f(U_POINTSIZE, 2.2f);
     glUniform1f(U_TIME, s->time);
 
     for (int i = 0; i < s->numAsteroids; i++) {
@@ -964,9 +1123,22 @@ void drawScene(Scene* s, Renderer* r) {
         glDrawElements(GL_LINES, r->text[digits[i]].indCount, GL_UNSIGNED_INT, (void*)r->text[digits[i]].indOffset);
         pos.x += r->scorePadding;
     }
+
+    drawBorder(r);
 }
 
-int main() {
+void drawFullScreenQuad(Renderer* r, Window* w) {
+    glViewport((w->screenSize.x - w->res.x) * 0.5f, (w->screenSize.y - w->res.y) * 0.5f, w->res.x, w->res.y);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClearNamedFramebufferfv(0, GL_COLOR, 0, &r->clearColor.x);
+    glClearNamedFramebufferfv(0, GL_DEPTH, 0, &r->clearDepth);
+    glUseProgram(r->fullScreenShader);
+    glBindTextureUnit(0, r->renderTarget);
+    glBindVertexArray(r->quadDrawInfo.vao);
+    glDrawElements(GL_TRIANGLE_STRIP, r->quadDrawInfo.indCount, GL_UNSIGNED_INT, (void*)r->boxDrawInfo.indOffset);
+}
+
+int main(int argc, char* argv[]) {
     Window*   window = malloc(sizeof(Window));
     Renderer* renderer = malloc(sizeof(Renderer));
     Input*    input = malloc(sizeof(Input));
@@ -974,17 +1146,25 @@ int main() {
 
     srand(time(NULL));
     initWindow(window, input);
-    initRenderer(renderer);
+    initRenderer(renderer, window);
     initScene(scene, renderer);
     loadLevel(scene, renderer);
 
+    scene->shootSoundSource = getToneSource(argc, argv);
+
+    updateTime(scene);
+    scene->deltaTime = 0.0f;
     while (!window->shouldClose) {
         updateTime(scene);
-        pollEvents(window);
+        pollEvents(window, renderer);
         updateInput(input);
         updateScene(scene, renderer, input);
-        drawScene(scene, renderer);
+        drawScene(scene, renderer, window);
+        drawFullScreenQuad(renderer, window);
         SDL_GL_SwapWindow(window->ptr);
+        ALint processedBufs;
+        alGetSourcei(scene->shootSoundSource, AL_BUFFERS_PROCESSED, &processedBufs);
+        // printf("processed: %i\n", processedBufs);
     }
 
     return 0;

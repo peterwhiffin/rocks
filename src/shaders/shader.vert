@@ -1,12 +1,13 @@
 #version 460 core
 layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aTexCoord;
 
-layout(location = 1) uniform vec2 modelPos;
-layout(location = 2) uniform float scale;
-layout(location = 3) uniform float angle;
-layout(location = 4) uniform float pointSize;
+layout(location = 2) uniform vec2 modelPos;
+layout(location = 3) uniform float scale;
+layout(location = 4) uniform float angle;
+layout(location = 5) uniform float pointSize;
 
-layout(location = 5) out vec2 fragPos;
+layout(location = 6) out vec2 fragPos;
 
 void main() {
     vec2 pos = aPos;
